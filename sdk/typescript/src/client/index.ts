@@ -10,3 +10,6 @@ export * from './user-share-encryption-keys.js';
 export * from './utils.js';
 export * from './network-configs.js';
 export * from './hash-signature-validation.js';
+
+export * from './ika-grpc-client.js';
+export * from './grpc-utils.js';

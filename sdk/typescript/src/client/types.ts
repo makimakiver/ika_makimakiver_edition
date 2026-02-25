@@ -4,6 +4,7 @@
 import type { BcsType } from '@mysten/sui/bcs';
 import { bcs, BcsStruct } from '@mysten/sui/bcs';
 import type { SuiClient } from '@mysten/sui/client';
+import type { SuiGrpcClient } from '@mysten/sui/grpc';
 
 import * as CoordinatorInnerModule from '../generated/ika_dwallet_2pc_mpc/coordinator_inner.js';
 import * as SystemInnerModule from '../generated/ika_system/system_inner.js';
@@ -62,6 +63,24 @@ export interface EncryptionKeyOptions {
 export interface IkaClientOptions {
 	config: IkaConfig;
 	suiClient: SuiClient;
+	timeout?: number;
+	protocolPublicParameters?: {
+		networkEncryptionKeyPublicOutputID: string;
+		epoch: number;
+		protocolPublicParameters: Uint8Array;
+	};
+	cache?: boolean;
+	/** Default encryption key options for the client */
+	encryptionKeyOptions?: EncryptionKeyOptions;
+}
+
+/**
+ * !!MODIFICATION!!
+ *  Added IkaGrpcClientOptions so that users can create IkaGrpcClientOptions
+ */
+export interface IkaGrpcClientOptions {
+	config: IkaConfig;
+	suiClient: SuiGrpcClient;
 	timeout?: number;
 	protocolPublicParameters?: {
 		networkEncryptionKeyPublicOutputID: string;
