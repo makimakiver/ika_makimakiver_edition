@@ -27,7 +27,7 @@ This interface is consumed by `IkaGrpcClient`'s constructor.
 
 ## Modified: `index.ts`
 
-**Added two new barrel exports:**
+**Added two new exports:**
 
 ```typescript
 export * from './ika-grpc-client.js';
