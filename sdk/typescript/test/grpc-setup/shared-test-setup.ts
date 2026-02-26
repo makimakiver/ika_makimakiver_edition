@@ -1,7 +1,6 @@
 // Copyright (c) dWallet Labs, Ltd.
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 
-import type { SuiClient } from '@mysten/sui/client';
 import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
 
@@ -11,7 +10,6 @@ import { IkaGrpcClient } from '../../src/index.js';
 import {
 	createTestIkaClient,
 	createTestIkaGrpcClient,
-	createTestSuiClient,
 	createTestSuiGrpcClient,
 	generateTestKeypair,
 } from './test-utils.js';

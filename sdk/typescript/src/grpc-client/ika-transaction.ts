@@ -434,6 +434,15 @@ export class IkaGrpcTransaction {
 		}
 
 		// Transferred DWallet encrypted user share acceptance
+		if (!sourceEncryptionKey) {
+			console.warn('[acceptEncryptedUserShare] Missing: sourceEncryptionKey');
+		}
+		if (!sourceEncryptedUserSecretKeyShare) {
+			console.warn('[acceptEncryptedUserShare] Missing: sourceEncryptedUserSecretKeyShare');
+		}
+		if (!destinationEncryptedUserSecretKeyShare) {
+			console.warn('[acceptEncryptedUserShare] Missing: destinationEncryptedUserSecretKeyShare');
+		}
 		if (
 			sourceEncryptionKey &&
 			sourceEncryptedUserSecretKeyShare &&
