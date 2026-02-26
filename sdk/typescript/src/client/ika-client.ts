@@ -1,7 +1,7 @@
 // Copyright (c) dWallet Labs, Ltd.
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 
-import type { SuiClient } from '@mysten/sui/client';
+import type { SuiJsonRpcClient, SuiObjectResponse } from '@mysten/sui/jsonRpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { toHex } from '@mysten/sui/utils';
 
@@ -63,7 +63,7 @@ export class IkaClient {
 	public encryptionKeyOptions: EncryptionKeyOptions;
 
 	/** The underlying Sui client for blockchain interactions */
-	private client: SuiClient;
+	private client: SuiJsonRpcClient;
 	/** Whether to enable caching of network objects and parameters */
 	private cache: boolean;
 	/** Cached network public parameters by encryption key ID and curve to avoid repeated fetching */
@@ -306,7 +306,7 @@ export class IkaClient {
 				id: dwalletID,
 				options: { showBcs: true },
 			})
-			.then((obj) => {
+			.then((obj: SuiObjectResponse) => {
 				const dWallet = CoordinatorInnerModule.DWallet.fromBase64(objResToBcs(obj));
 
 				return {

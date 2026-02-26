@@ -1,7 +1,7 @@
 // Copyright (c) dWallet Labs, Ltd.
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 
-import type { DynamicFieldInfo, SuiClient, SuiObjectResponse } from '@mysten/sui/client';
+import type { DynamicFieldInfo, SuiJsonRpcClient, SuiObjectResponse } from '@mysten/sui/jsonRpc';
 
 import { InvalidObjectError } from './errors.js';
 
@@ -24,10 +24,10 @@ export function objResToBcs(resp: SuiObjectResponse): string {
 }
 
 export async function fetchAllDynamicFields(
-	suiClient: SuiClient,
+	suiClient: SuiJsonRpcClient,
 	parentId: string,
 ): Promise<DynamicFieldInfo[]> {
-	const allFields: any[] = [];
+	const allFields: DynamicFieldInfo[] = [];
 	let cursor: string | null = null;
 
 	// eslint-disable-next-line no-constant-condition
@@ -37,7 +37,7 @@ export async function fetchAllDynamicFields(
 			cursor,
 		});
 		allFields.push(...response.data);
-		if (response.nextCursor === cursor) {
+		if (!response.hasNextPage) {
 			break;
 		}
 		cursor = response.nextCursor;

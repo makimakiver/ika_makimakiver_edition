@@ -45,6 +45,8 @@
 		"lint": "pnpm run eslint:check && pnpm run prettier:check",
 		"lint:fix": "pnpm run eslint:fix && pnpm run prettier:fix",
 		"test:e2e": "vitest run e2e",
+		"test:client": "pnpm vitest run test/ika-client/basic-features.test.ts",
+		"test:grpc:encryption-keys": "NODE_OPTIONS=\"--max-old-space-size=8192\" vitest run test/ika-grpc-client/encryption-keys.test.ts",
 		"prepare": "pnpm sui-ts-codegen generate"
 	},
 	"bugs": {

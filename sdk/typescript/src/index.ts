@@ -17,4 +17,9 @@ export * from './client/types.js';
 export * from './client/user-share-encryption-keys.js';
 export * from './client/utils.js';
 
+export * from './grpc-client/cryptography.js';
+export * from './grpc-client/ika-client.js';
+export * from './grpc-client/ika-transaction.js';
+export * from './grpc-client/types.js';
+export * from './grpc-client/utils.js';
 export { CoordinatorModule, CoordinatorInnerModule, SessionsManagerModule, SystemModule };

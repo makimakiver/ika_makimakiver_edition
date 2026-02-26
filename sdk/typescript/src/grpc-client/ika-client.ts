@@ -6,21 +6,22 @@ import type { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { fromBase64, toBase64, toHex } from '@mysten/sui/utils';
 
-import * as CoordinatorInnerModule from '../generated/ika_dwallet_2pc_mpc/coordinator_inner.js';
-import * as CoordinatorModule from '../generated/ika_dwallet_2pc_mpc/coordinator.js';
-import { TableVec } from '../generated/ika_system/deps/sui/table_vec.js';
-import * as SystemModule from '../generated/ika_system/system.js';
-import { getActiveEncryptionKey as getActiveEncryptionKeyFromCoordinator } from '../tx/coordinator.js';
 import {
 	networkDkgPublicOutputToProtocolPublicParameters,
 	parseSignatureFromSignOutput,
 	reconfigurationPublicOutputToProtocolPublicParameters,
-} from './cryptography.js';
-import { InvalidObjectError, NetworkError, ObjectNotFoundError } from './errors.js';
-import { grpcFetchAllDynamicFields, grpcObjToBcs } from './grpc-utils.js';
-import { fromNumberToCurve, validateCurveSignatureAlgorithm } from './hash-signature-validation.js';
-import type { ValidSignatureAlgorithmForCurve } from './hash-signature-validation.js';
-import { CoordinatorInnerDynamicField, DynamicField, SystemInnerDynamicField } from './types.js';
+} from '../client/cryptography.js';
+import { InvalidObjectError, NetworkError, ObjectNotFoundError } from '../client/errors.js';
+import {
+	fromNumberToCurve,
+	validateCurveSignatureAlgorithm,
+} from '../client/hash-signature-validation.js';
+import type { ValidSignatureAlgorithmForCurve } from '../client/hash-signature-validation.js';
+import {
+	CoordinatorInnerDynamicField,
+	DynamicField,
+	SystemInnerDynamicField,
+} from '../client/types.js';
 import type {
 	CoordinatorInner,
 	Curve,
@@ -36,7 +37,6 @@ import type {
 	EncryptionKey,
 	EncryptionKeyOptions,
 	IkaConfig,
-	IkaGrpcClientOptions,
 	NetworkEncryptionKey,
 	PartialUserSignature,
 	PartialUserSignatureState,
@@ -49,7 +49,12 @@ import type {
 	SignState,
 	SignWithState,
 	SystemInner,
-} from './types.js';
+} from '../client/types.js';
+import * as CoordinatorInnerModule from '../generated/ika_dwallet_2pc_mpc/coordinator_inner.js';
+import { TableVec } from '../generated/ika_system/deps/sui/table_vec.js';
+import { getActiveEncryptionKey as getActiveEncryptionKeyFromCoordinator } from '../tx/coordinator.js';
+import type { IkaGrpcClientOptions } from './types.js';
+import { grpcFetchAllDynamicFields, grpcObjToBcs, withGrpcRetry } from './utils.js';
 
 /**
  * IkaClient provides a high-level interface for interacting with the Ika network.
@@ -815,7 +820,7 @@ export class IkaGrpcClient {
 	 * @throws {NetworkError} If the network request fails
 	 */
 	async getProtocolPublicParameters(dWallet?: DWallet, curve?: Curve): Promise<Uint8Array> {
-		await this.#fetchEncryptionKeysFromNetwork();
+		await this.#fetchEncryptionKeys();
 
 		let networkEncryptionKey: NetworkEncryptionKey;
 
@@ -975,36 +980,27 @@ export class IkaGrpcClient {
 	 */
 	async #fetchObjectsFromNetwork() {
 		try {
-			const batchRes = await this.client.ledgerService.batchGetObjects({
+			const { response: topLevelBatch } = await this.client.ledgerService.batchGetObjects({
 				requests: [
 					{ objectId: this.ikaConfig.objects.ikaDWalletCoordinator.objectID },
 					{ objectId: this.ikaConfig.objects.ikaSystemObject.objectID },
 				],
-				readMask: { paths: ['bcs', 'owner'] },
+				readMask: { paths: ['owner'] },
 			});
+			const [coordinatorObj, systemObj] = topLevelBatch.objects;
 
-			const [coordinatorResult, systemResult] = batchRes.response.objects;
+			const coordinatorId = this.ikaConfig.objects.ikaDWalletCoordinator.objectID;
+			const systemId = this.ikaConfig.objects.ikaSystemObject.objectID;
 
-			if (
-				coordinatorResult.result.oneofKind !== 'object' ||
-				systemResult.result.oneofKind !== 'object'
-			) {
-				throw new ObjectNotFoundError('Coordinator or system object');
-			}
-
-			const coordinatorObj = coordinatorResult.result.object;
-			const systemObj = systemResult.result.object;
-
-			const coordinatorParsed = CoordinatorModule.DWalletCoordinator.fromBase64(
-				grpcObjToBcs({ response: { object: coordinatorObj } }),
-			);
-			const systemParsed = SystemModule.System.fromBase64(
-				grpcObjToBcs({ response: { object: systemObj } }),
-			);
-
-			const [coordinatorDFs, systemDFs] = await Promise.all([
-				this.client.core.getDynamicFields({ parentId: coordinatorParsed.id.id }),
-				this.client.core.getDynamicFields({ parentId: systemParsed.id.id }),
+			const [{ response: coordinatorDFs }, { response: systemDFs }] = await Promise.all([
+				this.client.stateService.listDynamicFields({
+					parent: coordinatorId,
+					readMask: { paths: ['field_id'] },
+				}),
+				this.client.stateService.listDynamicFields({
+					parent: systemId,
+					readMask: { paths: ['field_id'] },
+				}),
 			]);
 
 			if (!coordinatorDFs.dynamicFields.length || !systemDFs.dynamicFields.length) {
@@ -1015,36 +1011,52 @@ export class IkaGrpcClient {
 				coordinatorDFs.dynamicFields[coordinatorDFs.dynamicFields.length - 1];
 			const systemInnerDF = systemDFs.dynamicFields[systemDFs.dynamicFields.length - 1];
 
-			const innerBatchRes = await this.client.ledgerService.batchGetObjects({
-				requests: [{ objectId: coordinatorInnerDF.id }, { objectId: systemInnerDF.id }],
+			if (!coordinatorInnerDF || !systemInnerDF) {
+				throw new ObjectNotFoundError('Coordinator inner or system inner dynamic field');
+			}
+
+			if (!coordinatorInnerDF.fieldId || !systemInnerDF.fieldId) {
+				throw new ObjectNotFoundError('Coordinator inner or system inner field ID');
+			}
+
+			const { response: innerBatch } = await this.client.ledgerService.batchGetObjects({
+				requests: [{ objectId: coordinatorInnerDF.fieldId }, { objectId: systemInnerDF.fieldId }],
 				readMask: { paths: ['bcs'] },
 			});
 
-			const [coordinatorInnerResult, systemInnerResult] = innerBatchRes.response.objects;
+			const [coordinatorInnerRaw, systemInnerRaw] = innerBatch.objects;
 
-			if (
-				coordinatorInnerResult.result.oneofKind !== 'object' ||
-				systemInnerResult.result.oneofKind !== 'object'
-			) {
-				throw new ObjectNotFoundError('Coordinator inner or system inner object');
+			if (coordinatorInnerRaw?.result.oneofKind !== 'object') {
+				throw new ObjectNotFoundError('Coordinator inner field');
 			}
 
-			const coordinatorInnerParsed = CoordinatorInnerDynamicField.fromBase64(
-				grpcObjToBcs({ response: { object: coordinatorInnerResult.result.object } }),
-			).value;
+			if (systemInnerRaw?.result.oneofKind !== 'object') {
+				throw new ObjectNotFoundError('System inner field');
+			}
 
+			const coordinatorInnerBcs = grpcObjToBcs({
+				response: { object: coordinatorInnerRaw.result.object },
+			});
+
+			const coordinatorInnerParsed =
+				CoordinatorInnerDynamicField.fromBase64(coordinatorInnerBcs).value;
 			const systemInnerParsed = SystemInnerDynamicField.fromBase64(
-				grpcObjToBcs({ response: { object: systemInnerResult.result.object } }),
+				grpcObjToBcs({ response: { object: systemInnerRaw.result.object } }),
 			).value;
 
-			this.ikaConfig.packages.ikaSystemPackage = systemParsed.package_id;
-			this.ikaConfig.packages.ikaDwallet2pcMpcPackage = coordinatorParsed.package_id;
+			if (systemObj.result.oneofKind !== 'object' || !systemObj.result.object?.owner) {
+				throw new ObjectNotFoundError('System inner field');
+			}
 
+			if (coordinatorObj.result.oneofKind !== 'object' || !coordinatorObj.result.object?.owner) {
+				throw new ObjectNotFoundError('System inner field');
+			}
+			// package_id is supplied via ikaConfig at construction time
 			this.ikaConfig.objects.ikaSystemObject.initialSharedVersion = Number(
-				systemObj.owner?.version ?? 0,
+				systemObj.result.object?.owner.version ?? 0,
 			);
 			this.ikaConfig.objects.ikaDWalletCoordinator.initialSharedVersion = Number(
-				coordinatorObj.owner?.version ?? 0,
+				coordinatorObj.result.object?.owner.version ?? 0,
 			);
 
 			return {
@@ -1091,27 +1103,30 @@ export class IkaGrpcClient {
 	async #fetchEncryptionKeysFromNetwork(): Promise<NetworkEncryptionKey[]> {
 		try {
 			const objects = await this.ensureInitialized();
-			const keysDFs = await this.client.core.getDynamicFields({
-				parentId: objects.coordinatorInner.dwallet_network_encryption_keys.id.id,
-			});
+			const encryptionKeysParentId = objects.coordinatorInner.dwallet_network_encryption_keys.id.id;
+			const keysDFs = await grpcFetchAllDynamicFields(this.client, encryptionKeysParentId);
 
-			if (!keysDFs.dynamicFields.length) {
+			if (!keysDFs.length) {
 				throw new ObjectNotFoundError('Network encryption keys');
 			}
 
 			const encryptionKeys: NetworkEncryptionKey[] = [];
 
-			for (const keyDF of keysDFs.dynamicFields) {
-				const keyName = '0x' + toHex(keyDF.name.bcs ?? new Uint8Array());
-				const keyObject = await this.client.ledgerService.getObject({
-					objectId: keyDF.id,
-					readMask: { paths: ['bcs'] },
-				});
-
-				const keyParsed = CoordinatorInnerModule.DWalletNetworkEncryptionKey.fromBase64(
-					grpcObjToBcs(keyObject),
+			for (const keyDF of keysDFs) {
+				if (!keyDF.name.value) throw new Error('Encryption key name is missing');
+				const keyName = '0x' + toHex(keyDF.name.value);
+				// For ObjectTable<ID, V>, fieldId is the wrapper's ID, not the stored object's ID.
+				// The key (name.value) equals the stored object's own UID, so fetch by keyName.
+				const keyObject = await withGrpcRetry(() =>
+					this.client.ledgerService.getObject({
+						objectId: keyName,
+						readMask: { paths: ['bcs'] },
+					}),
 				);
-
+				if (!keyObject.response.object) throw new Error('Encryption key BCS is missing');
+				if (!keyObject.response.object.bcs) throw new Error('Encryption key BCS is missing');
+				const rawBcs = grpcObjToBcs(keyObject);
+				const keyParsed = CoordinatorInnerModule.DWalletNetworkEncryptionKey.fromBase64(rawBcs);
 				const reconfigOutputsDFs = await grpcFetchAllDynamicFields(
 					this.client,
 					keyParsed.reconfiguration_public_outputs.id.id,
@@ -1120,11 +1135,13 @@ export class IkaGrpcClient {
 				const lastReconfigOutput = (
 					await Promise.all(
 						reconfigOutputsDFs.map(async (df) => {
-							const name = String(bcs.u64().parse(df.name.bcs ?? new Uint8Array()));
-							const reconfigObject = await this.client.ledgerService.getObject({
-								objectId: df.id,
-								readMask: { paths: ['bcs'] },
-							});
+							const name = String(bcs.u64().parse(df.name.value ?? new Uint8Array()));
+							const reconfigObject = await withGrpcRetry(() =>
+								this.client.ledgerService.getObject({
+									objectId: df.id,
+									readMask: { paths: ['bcs'] },
+								}),
+							);
 
 							const parsedValue = DynamicField(TableVec).fromBase64(grpcObjToBcs(reconfigObject));
 
@@ -1176,13 +1193,14 @@ export class IkaGrpcClient {
 	 */
 	async readTableVecAsRawBytes(tableID: string): Promise<Uint8Array> {
 		try {
-			let cursor: string | null = null;
+			let pageToken: Uint8Array | undefined = undefined;
 			const allTableRows: { id: string }[] = [];
 
 			do {
-				const dynamicFieldPage = await this.client.core.getDynamicFields({
-					parentId: tableID,
-					cursor,
+				const { response: dynamicFieldPage } = await this.client.stateService.listDynamicFields({
+					parent: tableID,
+					pageToken,
+					readMask: { paths: ['field_id'] },
 				});
 
 				if (!dynamicFieldPage.dynamicFields.length) {
@@ -1192,13 +1210,15 @@ export class IkaGrpcClient {
 					break;
 				}
 
-				allTableRows.push(...dynamicFieldPage.dynamicFields);
-				cursor = dynamicFieldPage.cursor;
+				allTableRows.push(
+					...dynamicFieldPage.dynamicFields.map((df) => ({ id: df.fieldId ?? '' })),
+				);
+				pageToken = dynamicFieldPage.nextPageToken;
 
-				if (!dynamicFieldPage.hasNextPage) {
+				if (!dynamicFieldPage.nextPageToken) {
 					break;
 				}
-			} while (cursor);
+			} while (pageToken);
 
 			const dataMap = new Map<number, Uint8Array>();
 
@@ -1274,10 +1294,12 @@ export class IkaGrpcClient {
 			for (let i = 0; i < objectIds.length; i += batchSize) {
 				const batchIds = objectIds.slice(i, i + batchSize);
 
-				const batchRes = await this.client.ledgerService.batchGetObjects({
-					requests: batchIds.map((id) => ({ objectId: id })),
-					readMask: { paths: ['bcs'] },
-				});
+				const batchRes = await withGrpcRetry(() =>
+					this.client.ledgerService.batchGetObjects({
+						requests: batchIds.map((id) => ({ objectId: id })),
+						readMask: { paths: ['bcs'] },
+					}),
+				);
 
 				for (const obj of batchRes.response.objects) {
 					if (obj.result.oneofKind !== 'object') {
