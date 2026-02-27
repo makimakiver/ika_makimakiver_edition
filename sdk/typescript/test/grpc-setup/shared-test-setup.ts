@@ -17,7 +17,7 @@ import {
 // Shared test instances to reduce memory usage across all tests
 export class SharedTestSetup {
 	private static instance: SharedTestSetup | null = null;
-	public suiClient: SuiJsonRpcClient | null = null;
+	public suiClient: SuiGrpcClient | null = null;
 	public ikaClient: IkaClient | null = null;
 
 	// Added two extra public vars here
@@ -55,16 +55,15 @@ export class SharedTestSetup {
 	 * Initialize shared test instances
 	 */
 	public async initialize(): Promise<void> {
-		if (this.initialized) {
+		if (this.grpcInitialized) {
 			return;
 		}
 
-		// Create shared SuiClient and IkaClient
-		this.suiClient = createTestSuiClient();
-		this.ikaClient = createTestIkaClient(this.suiClient);
-		await this.ikaClient.initialize();
+		this.suiGrpcClient = createTestSuiGrpcClient();
+		this.ikaGrpcClient = createTestIkaGrpcClient(this.suiGrpcClient);
+		await this.ikaGrpcClient.initialize();
 
-		this.initialized = true;
+		this.grpcInitialized = true;
 	}
 
 	/**
@@ -97,16 +96,6 @@ export class SharedTestSetup {
 			this.sharedKeypairs.set(testName, generateTestKeypair(testName));
 		}
 		return this.sharedKeypairs.get(testName)!;
-	}
-
-	/**
-	 * Get shared SuiClient instance
-	 */
-	public getSuiClient(): SuiJsonRpcClient {
-		if (!this.suiClient) {
-			throw new Error('SharedTestSetup not initialized. Call initialize() first.');
-		}
-		return this.suiClient;
 	}
 
 	/**

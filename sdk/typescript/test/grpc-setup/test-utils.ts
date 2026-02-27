@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { dwallet_version } from '@ika.xyz/ika-wasm';
 import { toHex } from '@mysten/bcs';
-import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
+import { getFullnodeUrl } from '@mysten/sui/client';
 import { getFaucetHost, requestSuiFromFaucetV2 } from '@mysten/sui/faucet';
 import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { getJsonRpcFullnodeUrl, SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
@@ -15,7 +15,6 @@ import type { Transaction, TransactionObjectArgument } from '@mysten/sui/transac
 import { randomBytes } from '@noble/hashes/utils.js';
 import { expect } from 'vitest';
 
-import { IkaClient } from '../../src/client/ika-client.js';
 import { IkaTransaction } from '../../src/client/ika-transaction.js';
 import { getNetworkConfig } from '../../src/client/network-configs.js';
 import {
@@ -28,19 +27,19 @@ import {
 	ZeroTrustDWallet,
 } from '../../src/client/types.js';
 import { UserShareEncryptionKeys } from '../../src/client/user-share-encryption-keys.js';
-import { IkaGrpcClient } from '../../src/index.js';
+import { IkaGrpcClient, IkaGrpcTransaction } from '../../src/index.js';
 import {
 	createCompleteDWallet,
 	createCompleteDWalletV2,
 	testPresign,
 	testSign,
-} from '../helpers/dwallet-test-helpers.js';
+} from '../grpc-setup/dwallet-test-helpers.js';
 
 // Store random seeds per test to ensure deterministic behavior within each test
 const testSeeds = new Map<string, Uint8Array>();
 
 export async function getObjectWithType<TObject>(
-	suiClient: SuiClient,
+	suiClient: SuiGrpcClient,
 	objectID: string,
 	isObject: (obj: any) => obj is TObject,
 ): Promise<TObject> {
@@ -105,8 +104,8 @@ export function clearAllTestSeeds(): void {
  */
 export function createTestSuiGrpcClient(): SuiGrpcClient {
 	return new SuiGrpcClient({
-		baseUrl: process.env.SUI_TESTNET_URL || getJsonRpcFullnodeUrl('testnet'),
-		network: process.env.SUI_TESTNET_NETWORK || 'testnet',
+		baseUrl: getJsonRpcFullnodeUrl('localnet'),
+		network: 'localnet',
 	});
 }
 
@@ -149,13 +148,15 @@ export function createTestIkaGrpcClient(suiClient: SuiGrpcClient): IkaGrpcClient
  * Requests funds from the faucet for a given address
  */
 export async function requestTestFaucetFunds(address: string): Promise<void> {
-	const maxRetries = 3;
+	const maxRetries = 5;
 	const baseDelay = 5000; // 5 seconds
+	const faucetHost = process.env.SUI_FAUCET_URL || getFaucetHost('localnet');
+	let lastError: any;
 
 	for (let attempt = 1; attempt <= maxRetries; attempt++) {
 		try {
 			await requestSuiFromFaucetV2({
-				host: process.env.SUI_FAUCET_URL || getFaucetHost('localnet'),
+				host: faucetHost,
 				recipient: address,
 			});
 
@@ -163,27 +164,22 @@ export async function requestTestFaucetFunds(address: string): Promise<void> {
 			await sleep(2000);
 			return;
 		} catch (error: any) {
-			if (error.message?.includes('Too many requests') || error.name === 'FaucetRateLimitError') {
-				const delay = baseDelay * attempt; // Exponential backoff
-				console.warn(
-					`⏳ Faucet rate limit hit for ${address}. Waiting ${delay / 1000}s before retry ${attempt}/${maxRetries}...`,
-				);
-
-				if (attempt < maxRetries) {
-					await sleep(delay);
-					continue;
-				} else {
-					console.warn(
-						`❌ Failed to fund ${address} after ${maxRetries} attempts. Proceeding without funds.`,
-					);
-					return;
-				}
-			} else {
-				console.warn(`❌ Faucet error for ${address}:`, error.message);
-				return;
+			lastError = error;
+			const isRateLimit =
+				error.message?.includes('Too many requests') || error.name === 'FaucetRateLimitError';
+			const delay = baseDelay * attempt;
+			console.warn(
+				`⏳ Faucet attempt ${attempt}/${maxRetries} failed for ${address}: ${error.message}. Retrying in ${delay / 1000}s...`,
+			);
+			if (attempt < maxRetries) {
+				await sleep(delay);
 			}
 		}
 	}
+
+	throw new Error(
+		`Failed to fund ${address} from faucet at ${faucetHost} after ${maxRetries} attempts: ${lastError?.message}`,
+	);
 }
 
 export function findIkaConfigFile(): string {
@@ -226,11 +222,11 @@ export function findIkaConfigFile(): string {
 /**
  * Creates an IkaClient for testing
  */
-export function createTestIkaClient(suiClient: SuiClient): IkaClient {
+export function createTestIkaClient(suiClient: SuiGrpcClient): IkaGrpcClient {
 	const configPath = findIkaConfigFile();
 	const parsedJson = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
-	return new IkaClient({
+	return new IkaGrpcClient({
 		suiClient,
 		config: {
 			packages: {
@@ -257,7 +253,7 @@ export function createTestIkaClient(suiClient: SuiClient): IkaClient {
  * Executes a transaction with deterministic signing
  */
 export async function executeTestTransaction(
-	suiClient: SuiClient,
+	suiClient: SuiGrpcClient,
 	transaction: Transaction,
 	testName: string,
 ) {
@@ -271,15 +267,15 @@ export async function executeTestTransaction(
  * Executes a transaction with deterministic signing using a provided keypair.
  */
 export async function executeTestTransactionWithKeypair(
-	suiClient: SuiClient,
+	suiClient: SuiGrpcClient,
 	transaction: Transaction,
 	signerKeypair: Ed25519Keypair,
 ) {
 	return suiClient.signAndExecuteTransaction({
 		transaction,
 		signer: signerKeypair,
-		options: {
-			showEvents: true,
+		include: {
+			events: true,
 		},
 	});
 }
@@ -353,11 +349,11 @@ export function destroyEmptyTestIkaToken(
  * Test helper for setting up a basic IkaTransaction
  */
 export function createTestIkaTransaction(
-	ikaClient: IkaClient,
+	ikaClient: IkaGrpcClient,
 	transaction: Transaction,
 	userShareEncryptionKeys?: UserShareEncryptionKeys,
 ) {
-	return new IkaTransaction({
+	return new IkaGrpcTransaction({
 		ikaClient,
 		transaction,
 		userShareEncryptionKeys,
@@ -426,8 +422,8 @@ export function delay(seconds: number): Promise<void> {
 }
 
 export async function runSignFullFlowWithDWallet(
-	ikaClient: IkaClient,
-	suiClient: SuiClient,
+	ikaClient: IkaGrpcClient,
+	suiClient: SuiGrpcClient,
 	createDWalletResponse: {
 		dWallet: DWallet;
 		encryptedUserSecretKeyShare: EncryptedUserSecretKeyShare;
@@ -485,8 +481,8 @@ export async function runSignFullFlowWithDWallet(
 }
 
 export async function runSignFullFlowWithV1Dwallet(
-	ikaClient: IkaClient,
-	suiClient: SuiClient,
+	ikaClient: IkaGrpcClient,
+	suiClient: SuiGrpcClient,
 	testName: string,
 	registerEncryptionKey: boolean = true,
 ) {
@@ -539,8 +535,8 @@ export async function runSignFullFlowWithV1Dwallet(
 }
 
 export async function runSignFullFlowWithV2Dwallet(
-	ikaClient: IkaClient,
-	suiClient: SuiClient,
+	ikaClient: IkaGrpcClient,
+	suiClient: SuiGrpcClient,
 	testName: string,
 	registerEncryptionKey: boolean = true,
 ) {
@@ -592,7 +588,7 @@ export async function runSignFullFlowWithV2Dwallet(
 	);
 }
 
-export async function waitForEpochSwitch(ikaClient: IkaClient) {
+export async function waitForEpochSwitch(ikaClient: IkaGrpcClient) {
 	const startEpoch = await ikaClient.getEpoch();
 	let epochSwitched = false;
 	while (!epochSwitched) {

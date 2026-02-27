@@ -323,7 +323,7 @@ dwallet-classgroups-types = { path = "crates/dwallet-classgroups-types"}
 ika = { path = "crates/ika" }
 ika-config = { path = "crates/ika-config" }
 ika-core = { path = "crates/ika-core" }
-ika-node = { path = "crates/ika-node" }
+ika-node = { path = "crates/ika-node", default-features = false }
 ika-sui-client = { path = "crates/ika-sui-client" }
 ika-porxy = { path = "crates/ika-proxy" }
 ika-protocol-config = { path = "crates/ika-protocol-config" }

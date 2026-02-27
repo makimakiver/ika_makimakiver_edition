@@ -48,7 +48,7 @@
 		"lint:fix": "pnpm run eslint:fix && pnpm run prettier:fix",
 		"test:e2e": "vitest run e2e",
 		"test:client": "pnpm vitest run test/ika-client/basic-features.test.ts",
-		"test:grpc:encryption-keys": "NODE_OPTIONS=\"--max-old-space-size=8192\" vitest run test/ika-grpc-client/encryption-keys.test.ts",
+		"test:grpc-integration": "NODE_OPTIONS=\"--max-old-space-size=8192\" vitest run test/grpc-integration/dwallet-creation.test.ts && vitest run test/grpc-integration/all-combinations.test.ts && vitest run test/grpc-integration/all-combinations-future-sign.test.ts && vitest run test/grpc-integration/dwallet-sign-during-dkg.test.ts && vitest run test/grpc-integration/global-presign.test.ts && vitest run test/grpc-integration/imported-key.test.ts && vitest run test/grpc-integration/imported-key-make-public-share-and-sign.test.ts && vitest run test/grpc-integration/make-public-share-and-sign.test.ts && vitest run test/grpc-integration/transfer-dwallet.test.ts",
 		"prepare": "sui client --yes active-address && pnpm sui-ts-codegen generate"
 	},
 	"bugs": {
